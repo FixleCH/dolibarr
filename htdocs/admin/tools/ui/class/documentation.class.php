@@ -18,7 +18,7 @@
  */
 
 /**
- *    \file       htdocs/admint/tools/ui/class/uidoc.class.php
+ *    \file       htdocs/admint/tools/ui/class/documentation.class.php
  *    \ingroup    ui
  *    \brief      File of class to manage UI documentation
  */
@@ -155,6 +155,7 @@ class Documentation
 					'summary' => array(
 						'DocBasicUsage' => '#seteventmessagesection-basicusage',
 						'DocSetEventMessageContextualVariations' => '#seteventmessagesection-contextvariations',
+						'DocSetEventMessageJsContext' => '#titlesection-tool-seteventmessage',
 					)
 				),
 				'Inputs' => array(
@@ -236,7 +237,35 @@ class Documentation
 			)
 		);
 
-
+		// Elements
+		$this->menu['UxDolibarrContext'] = array(
+			'url' => dol_buildpath($this->baseUrl.'/dolibarr-context/index.php', 1),
+			'icon' => 'fab fa-fort-awesome',
+			'submenu' => array(
+				'UxDolibarrContextHowItWork' => array(
+					'url' => dol_buildpath($this->baseUrl.'/dolibarr-context/index.php', 1),
+					'icon' => 'fab fa-fort-awesome',
+					'submenu' => array(),
+					'summary' => array(
+						'Introduction' => '#titlesection-basicusage',
+						'ConsoleHelp' => '#titlesection-console-help',
+						'JSDolibarrhooks' => '#titlesection-hooks',
+						'JSDolibarrhooksReadyVsInit' => '#titlesection-event-init-vs-ready',
+						'JSDolibarrAwaitHooks' => '#titlesection-await-hooks',
+						'JSDolibarrhooksAjaxSpecial' => '#titlesection-dom-initnewcontent',
+						'ExampleOfCreatingNewContextTool' => '#titlesection-create-tool-example',
+						'SetEventMessageTool' => '#titlesection-tool-seteventmessage',
+						'SetAndUseContextVars' => '#titlesection-contextvars',
+					),
+				),
+				'UxDolibarrContextLangsTool' => array(
+					'url' => dol_buildpath($this->baseUrl.'/dolibarr-context/langs-tool.php', 1),
+					'icon' => 'far fa-flag',
+					'submenu' => array(),
+					'summary' => array(),
+				),
+			)
+		);
 
 		// Elements
 		$this->menu['ExperimentalUx'] = array(
@@ -252,34 +281,6 @@ class Documentation
 						'ExperimentalUxIntroductionTitle' => '#experimental-ux-introduction',
 						'ExperimentalUxContributionTitle' => '#experimental-ux-contribution',
 					),
-				),
-				'UxDolibarrContext' => array(
-					'url' => dol_buildpath($this->baseUrl.'/experimental/experiments/dolibarr-context/index.php', 1),
-					'icon' => 'fas fa-flask',
-					'submenu' => array(
-						'UxDolibarrContextHowItWork' => array(
-							'url' => dol_buildpath($this->baseUrl.'/experimental/experiments/dolibarr-context/index.php', 1),
-							'icon' => 'fas fa-flask',
-							'submenu' => array(),
-							'summary' => array(
-								'Introduction' => '#titlesection-basicusage',
-								'ConsoleHelp' => '#titlesection-console-help',
-								'JSDolibarrhooks' => '#titlesection-hooks',
-								'JSDolibarrhooksReadyVsInit' => '#titlesection-event-init-vs-ready',
-								'JSDolibarrAwaitHooks' => '#titlesection-await-hooks',
-								'ExampleOfCreatingNewContextTool' => '#titlesection-create-tool-example',
-								'SetEventMessageTool' => '#titlesection-tool-seteventmessage',
-								'SetAndUseContextVars' => '#titlesection-contextvars',
-							),
-						),
-						'UxDolibarrContextLangsTool' => array(
-							'url' => dol_buildpath($this->baseUrl.'/experimental/experiments/dolibarr-context/langs-tool.php', 1),
-							'icon' => 'fas fa-flask',
-							'submenu' => array(),
-							'summary' => array(),
-						),
-					),
-					'summary' => array(),
 				),
 			)
 		);

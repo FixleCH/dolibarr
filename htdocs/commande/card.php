@@ -3554,13 +3554,15 @@ if ($action == 'create' && $usercancreate) {
 				}
 
 				// Create contract
-				$arrayforbutaction[] = array(
-					'lang' => 'contracts',
-					'enabled' => (isModEnabled("contract") && ($object->status == Commande::STATUS_VALIDATED || $object->status == Commande::STATUS_SHIPMENTONPROCESS || $object->status == Commande::STATUS_CLOSED)),
-					'perm' => ($user->hasRight('contrat', 'creer') == 1),
-					'label' => 'AddContract',
-					'url' => '/contrat/card.php?action=create&amp;origin=' . $object->element . '&amp;originid=' . $object->id . '&amp;socid=' . $object->socid,
-				);
+				if (!getDolGlobalInt('COMMANDE_DISABLE_ADD_CONTRACT')) {
+					$arrayforbutaction[] = [
+						'lang' => 'contracts',
+						'enabled' => (isModEnabled("contract") && ($object->status == Commande::STATUS_VALIDATED || $object->status == Commande::STATUS_SHIPMENTONPROCESS || $object->status == Commande::STATUS_CLOSED)),
+						'perm' => ($user->hasRight('contrat', 'creer') == 1),
+						'label' => 'AddContract',
+						'url' => '/contrat/card.php?action=create&amp;origin=' . $object->element . '&amp;originid=' . $object->id . '&amp;socid=' . $object->socid,
+					];
+				}
 				/*if (isModEnabled('contract') && ($object->status == Commande::STATUS_VALIDATED || $object->status == Commande::STATUS_SHIPMENTONPROCESS || $object->status == Commande::STATUS_CLOSED)) {
 					$langs->load("contracts");
 
@@ -3644,7 +3646,7 @@ if ($action == 'create' && $usercancreate) {
 
 				// Clone
 				if ($usercancreate) {
-					print dolGetButtonAction('', $langs->trans('ToClone'), 'default', $_SERVER["PHP_SELF"] . '?action=clone&token=' . newToken() . '&id=' . $object->id . '&socid=' . $object->socid, '');
+					print dolGetButtonAction('', $langs->trans('ToClone'), 'clone', $_SERVER["PHP_SELF"] . '?action=clone&token=' . newToken() . '&id=' . $object->id . '&socid=' . $object->socid, '');
 				}
 
 				// Cancel order

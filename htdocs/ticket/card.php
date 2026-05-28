@@ -2,7 +2,7 @@
 /* Copyright (C) 2013-2016 Jean-François FERRY  <hello@librethic.io>
  * Copyright (C) 2016      Christophe Battarel  <christophe@altairis.fr>
  * Copyright (C) 2018      Laurent Destailleur  <eldy@users.sourceforge.net>
- * Copyright (C) 2021-2025  Frédéric France		<frederic.france@free.fr>
+ * Copyright (C) 2021-2026  Frédéric France		<frederic.france@free.fr>
  * Copyright (C) 2021      Alexandre Spangaro   <aspangaro@open-dsi.fr>
  * Copyright (C) 2022-2023 Charlene Benke       <charlene@patas-monkey.com>
  * Copyright (C) 2023      Benjamin Falière		<benjamin.faliere@altairis.fr>
@@ -35,6 +35,7 @@ require '../main.inc.php';
 /**
  * @var Conf $conf
  * @var DoliDB $db
+ * @var ExtraFields $extrafields
  * @var HookManager $hookmanager
  * @var Translate $langs
  * @var User $user
@@ -42,7 +43,6 @@ require '../main.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/ticket/class/actions_ticket.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formticket.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formfile.class.php';
-require_once DOL_DOCUMENT_ROOT.'/core/class/extrafields.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/ticket.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/company.lib.php';
@@ -73,8 +73,8 @@ $projectid = GETPOSTINT('projectid');
 $notifyTiers = GETPOST("notify_tiers_at_create", 'alpha');
 $mine      = GETPOSTINT('mine');
 
-$action    = GETPOST('action', 'aZ09');
-$cancel    = GETPOST('cancel', 'alpha');
+$action = GETPOST('action', 'aZ09');
+$cancel = GETPOST('cancel', 'alpha');
 $backtopage = GETPOST('backtopage', 'alpha');
 $backtopageforcancel = GETPOST('backtopageforcancel', 'alpha');
 $contextpage = GETPOST('contextpage', 'aZ');
@@ -99,7 +99,6 @@ if (GETPOST('actioncode', 'array')) {
 $hookmanager->initHooks(array('ticketcard', 'globalcard'));
 
 $object = new Ticket($db);
-$extrafields = new ExtraFields($db);
 
 // Fetch optionals attributes and labels
 $extrafields->fetch_name_optionals_label($object->table_element);
@@ -1164,9 +1163,9 @@ if ($action == 'create' || $action == 'presend') {
 			print '<input type="hidden" name="token" value="'.newToken().'">';
 			print '<input type="hidden" name="action" value="assign_user">';
 			print '<input type="hidden" name="track_id" value="'.$object->track_id.'">';
-			//print '<label for="fk_user_assign">'.$langs->trans("AssignUser").'</label> ';
-			print $form->select_dolusers(empty($object->fk_user_assign) ? $user->id : $object->fk_user_assign, 'fk_user_assign', 1);
+			print $form->select_dolusers(empty($object->fk_user_assign) ? $user->id : $object->fk_user_assign, 'fk_user_assign', 1, null, 0, '', '', '', 0, 0, '', 0, '', '', 1);
 			print ' <input type="submit" class="button smallpaddingimp" name="btn_assign_user" value="'.$langs->trans("Validate").'" />';
+			print ' <input type="submit" class="button smallpaddingimp" name="btn_cancel" value="'.$langs->trans("Cancel").'" />';
 			print '</form>';
 		}
 		print '</td></tr>';
@@ -1525,7 +1524,7 @@ if ($action == 'create' || $action == 'presend') {
 
 				// Clone
 				if ($permissiontoadd) {
-					print dolGetButtonAction('', $langs->trans('ToClone'), 'default', $_SERVER['PHP_SELF'].'?id='.$object->id.'&action=clone&token='.newToken(), '', $permissiontoadd);
+					print dolGetButtonAction('', $langs->trans('ToClone'), 'clone', $_SERVER['PHP_SELF'].'?id='.$object->id.'&action=clone&token='.newToken(), '', $permissiontoadd);
 				}
 
 				// Delete ticket

@@ -1,6 +1,8 @@
 <?php
 /* Copyright (C) 2026	Laurent Destailleur		<eldy@users.sourceforge.net>
  * Copyright (C) 2026	Nick Fragoulis
+ * Copyright (C) 2026	Jose Martinez			<jose.martinez@pichinov.com>
+ * Copyright (C) 2026	Anthony Damhet			<a.damhet@progiseize.fr>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +23,7 @@
  * \file    htdocs/ai/assistant/parse_intent.php
  * \ingroup ai
  * \brief   File to handle MCP (Model Context Protocol) Intent Parsing
+ * 			This service receive a prompt, format and complete it with list of tools, send it to AI service and return the answer
  */
 
 if (!defined('NOTOKENRENEWAL')) {
@@ -35,7 +38,9 @@ if (!defined('NOREQUIREHTML')) {
 if (!defined('NOREQUIREAJAX')) {
 	define('NOREQUIREAJAX', 1);
 }
-if (!defined('NOCSRFCHECK')) {		// TODO Enable the CSRF check
+// The payload is read from the raw php://input body, so the CSRF token cannot be checked by
+// main.inc.php. It is checked explicitly below by aiCheckCsrfToken().
+if (!defined('NOCSRFCHECK')) {
 	define('NOCSRFCHECK', 1);
 }
 
@@ -43,7 +48,6 @@ require '../../main.inc.php';
 require_once DOL_DOCUMENT_ROOT . '/ai/class/mcp.class.php';
 require_once DOL_DOCUMENT_ROOT . '/ai/lib/ai.lib.php';
 require_once DOL_DOCUMENT_ROOT . '/ai/class/llmadapter.class.php';
-require_once DOL_DOCUMENT_ROOT . '/core/lib/functions.lib.php';
 require_once DOL_DOCUMENT_ROOT . '/ai/class/privacy_guard.class.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/security2.lib.php';
 
@@ -54,6 +58,16 @@ if (!isModEnabled('ai') || !getDolGlobalString('AI_ASSISTANT_ENABLED')) {
 }
 
 global $db, $user, $conf, $langs;
+
+// Same per-user gate as the Assistant page that calls this endpoint, so a
+// user without 'ai/assistant/use' cannot reach the LLM through direct AJAX.
+if (!$user->hasRight('ai', 'assistant', 'use')) {
+	accessforbidden();
+}
+
+// This endpoint sends data to the LLM provider on behalf of the user and can chain tool
+// executions, so it must not be reachable from another site.
+aiCheckCsrfToken('ai/assistant/parse_intent.php');
 
 ob_start();
 top_httphead('application/json');
@@ -99,9 +113,56 @@ try {
 	$data = json_decode($raw_input, true);
 	$query = isset($data['query']) ? trim($data['query']) : '';
 
+	// This is to allow easy test of the parse_intent.php by calling the URL with param query=test
+	if (empty($query) && GETPOST('query', 'alphanohtml') == 'testdebug') {
+		$query = 'testdebug';
+	}
+
 	if (empty($query)) {
 		ob_end_clean();
 		echo json_encode(["status" => "ok"]);
+		exit;
+	}
+
+	// Extract file attachments sent by the chat (paperclip flow). The JS embeds
+	// cloud-parsed documents as "__FILE_ATTACHMENT__[mime]::<base64>" markers in
+	// the query. They MUST be stripped here, before the privacy/thirdparty
+	// candidate pipeline (which would run regexes over megabytes of base64), and
+	// are handed to the LLM adapter as NATIVE multimodal parts — inlining base64
+	// into the text prompt makes every provider fail or hallucinate.
+	$attachments = array();
+	if (strpos($query, '__FILE_ATTACHMENT__') !== false) {
+		$query = preg_replace_callback(
+			'/__FILE_ATTACHMENT__\[([^\]]*)\]::([A-Za-z0-9+\/=\r\n]+)/',
+			/**
+			 * @param string[] $m Regex matches: [1] = mime type, [2] = base64 payload
+			 * @return string
+			 */
+			static function (array $m) use (&$attachments) {
+				$attachments[] = array(
+					'mime' => ($m[1] !== '' ? $m[1] : 'application/octet-stream'),
+					'data' => preg_replace('/\s+/', '', $m[2])
+				);
+				return '[attached document]';
+			},
+			$query
+		);
+		$query = trim((string) $query);
+		if ($query === '' || $query === '[attached document]') {
+			$query = 'Analyze the attached document and describe its content.';
+		}
+	}
+
+	// Server-side gate on what the browser sent: MIME allowlist, size caps,
+	// and the privacy-redaction policy (documents cannot be masked, so under
+	// enforced redaction they must not go to a cloud provider at all).
+	$attachmenterror = '';
+	if (!ai_validate_attachments($attachments, $attachmenterror)) {
+		ob_end_clean();
+		echo json_encode(array(
+			"tool" => "respond_to_user",
+			"arguments" => array("message" => $attachmenterror)
+		));
 		exit;
 	}
 
@@ -240,6 +301,12 @@ try {
 	if ($doRedact && class_exists('PrivacyGuard')) {
 		$guard = new PrivacyGuard();
 		$query = $guard->mask($query);
+		// In-context reinforcement, adjacent to the placeholders themselves:
+		// weak models weigh nearby text far more than distant system rules, and
+		// the system-rule variant alone proved insufficient in the field.
+		if (strpos($query, '[[') !== false) {
+			$query .= "\n\n(Note: tokens like [[REF_1]] or [[ADDR_2]] above are privacy-masked real values. Use them verbatim as tool argument values - they are replaced with the real data before execution. Do not refuse the task because of them and do not ask the user to re-provide masked details.)";
+		}
 	}
 
 	// AI Execution
@@ -249,26 +316,47 @@ try {
 
 	if ($serviceKey && $serviceKey !== '-1') {
 		$providerUsed = $serviceKey;
-		$mcp = new McpHandler($db, $user);
+		$mcp = new McpHandler($db, $user, $conf, McpHandler::CTX_ASSISTANT);
+		$mcp->loadTools();		// This fill array ->loadedTools and ->toolsByName from tools found into ai/tools/
 
-		// Fetch all tools
+		// Two schemas are maintained:
+		//   $allToolsSchema: full list including system tools; used ONLY for post-LLM validation.
+		//   $llmToolsBase:   list excluding system tools (is_system=>true filtered out in McpHandler);
+		//                    used for category filtering and as the LLM tool list.
+		// This separation guarantees that ask_for_confirmation, respond_to_user, etc. are never visible to the model, preventing the LLM from calling them directly.
 		$allToolsSchema = $mcp->getToolsSchema();
+		$llmToolsBase   = $mcp->getToolsSchemaForLLM();
 
 		// Detect if query is in a Non-Latin language (Russian, Greek, Chinese, Arabic, etc.)
 		$isComplex = isComplexScript($query);
 
+		// Special case we ask debug info
+		if ($query == 'testdebug') {
+			print '----- loadedTools'."\n";
+			print '<pre>' . json_encode($mcp->loadedTools, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . '</pre>';
+			print "\n";
+			print "\n";
+			print '----- toolsByName'."\n";
+			print '<pre>' . json_encode($mcp->loadedTools, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . '</pre>';
+			print "\n";
+			print "\n";
+			print '----- allToolsSchema (non system + system)'."\n";
+			print '<pre>' . json_encode($allToolsSchema, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . '</pre>';
+			exit;
+		}
+
 		$toolsSchema = [];
 
 		if ($isComplex) {
-			// We send ALL tools to ensure accuracy.
+			// Non-Latin: send full LLM-safe schema (system tools already excluded)
 			dol_syslog("AI Pro: Non-Latin language detected. Sending full (cleaned) schema.");
-			$toolsSchema = $allToolsSchema;
+			$toolsSchema = $llmToolsBase;
 		} else {
 			// Detect in which business family the query is using Hybrid (Translations + Synonyms)
 			$detectedCategories = classifyIntentUniversal($query, $langs);
 
-			// Filter Logic
-			$toolsSchema = filterToolsProfessional($allToolsSchema, $detectedCategories);
+			// Category filter applied to $llmToolsBase — system tools already excluded
+			$toolsSchema = filterToolsProfessional($llmToolsBase, $detectedCategories);
 
 			dol_syslog("AI Pro: Latin script. Detected: " . json_encode($detectedCategories) . ". Filtered to " . count($toolsSchema) . " tools.");
 		}
@@ -299,7 +387,19 @@ try {
 
 		$systemPrompt = $basePrompt . "\n\n";
 		$systemPrompt .= "Tools:\n" . json_encode($toolsForLLM, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-		$systemPrompt .= $systemRules . " Date: " . date('Y-m-d');
+		// When redaction is active, the model sees [[TYPE_N]] placeholders where
+		// PII was. Without this rule it refuses tasks needing those values
+		// with it, placeholders travel verbatim through tool arguments and are restored server-side
+		// (unmaskAiResponse on the raw intent JSON) before execution, so the
+		// cloud never sees the data and the task still completes.
+		if ($doRedact) {
+			$systemRules .= " Privacy masking is active: values like [[REF_1]], [[ADDR_2]], [[EMAIL_3]], [[PHONE_4]], [[ZIP_5]] are masked real data. Treat them as valid values: when a tool argument needs such a datum, pass the placeholder exactly as written — it is replaced by the real value before execution. Never refuse a task because values look masked, and never invent replacements for them.";
+		}
+
+		// A bare date is not enough for weaker models: state explicitly that
+		// relative periods are the assistant's job to resolve, not the user's.
+		$systemPrompt .= $systemRules . " Current date: " . date('Y-m-d') . " (" . date('l') . ").";
+		$systemPrompt .= " Resolve relative periods yourself from the current date — today, yesterday, this week, this month, last month, this quarter, this year — into explicit YYYY-MM-DD values for date parameters (e.g. this month = first day of the current month to the current date). Never ask the user for dates you can compute.";
 
 		// Get API configuration
 		$servicesList = getListOfAIServices();
@@ -339,6 +439,14 @@ try {
 		if (!is_string($model) || $model === '') {
 			$model = (string) $defModel;
 		}
+		// Optional per-request model override sent by the chat model picker.
+		// Sanitized to the provider model-id charset; empty/invalid = keep default.
+		if (!empty($data['model']) && is_string($data['model'])) {
+			$reqModel = preg_replace('/[^a-zA-Z0-9._:\/-]/', '', $data['model']);
+			if ($reqModel !== '' && strlen($reqModel) <= 100) {
+				$model = $reqModel;
+			}
+		}
 		$adapterType = $servicesList[$serviceKey]['adapter_type'] ?? 'openai';
 
 
@@ -350,7 +458,7 @@ try {
 
 			dol_syslog("parse_intent.php Call AI API", LOG_DEBUG);
 
-			$rawResponse = $adapter->generate($systemPrompt, $query);
+			$rawResponse = $adapter->generate($systemPrompt, $query, 'text', $attachments);
 
 			// $rawResponse should be a json string with format '{"tool":..., "arguments":{text answer}}' but sometimes it is just 'text answer'
 			dol_syslog('rawResponse='.$rawResponse, LOG_DEBUG);
@@ -402,7 +510,7 @@ try {
 
 				// Validation check: Check if the AI selected a tool that actually exists in our filtered schema.
 				if ($intentJSON && isset($intentJSON['tool'])) {
-					$validToolNames = array_column($toolsSchema, 'name');
+					$validToolNames = array_column($allToolsSchema, 'name');
 					if (!in_array($intentJSON['tool'], $validToolNames)) {
 						dol_syslog("AI Validation: Tool '" . $intentJSON['tool'] . "' not found in filtered schema. Send error message via respond_to_user.", LOG_WARNING);
 
@@ -449,6 +557,21 @@ try {
 	// Check if confirmation needed
 	$needsConfirmation = false;
 	$toolName = $intentJSON['tool'] ?? '';
+
+	// Normalize the text answer key: some models (e.g. GPT-4o) fill
+	// respond_to_user / reject_general_question under 'response', 'text',
+	// 'answer'... instead of the 'message' key the frontend reads, which
+	// otherwise surfaces as "Empty AI Response".
+	if (in_array($toolName, array('respond_to_user', 'reject_general_question'), true) && isset($intentJSON['arguments']) && is_array($intentJSON['arguments'])) {
+		if (empty($intentJSON['arguments']['message'])) {
+			foreach (array('response', 'text', 'answer', 'content', 'reply', 'output') as $altkey) {
+				if (!empty($intentJSON['arguments'][$altkey])) {
+					$intentJSON['arguments']['message'] = $intentJSON['arguments'][$altkey];
+					break;
+				}
+			}
+		}
+	}
 
 	if ($askForConfirmation > 0) {
 		$isModifyOperation = preg_match('/(create|update|delete|add|remove|modify|edit)/i', $toolName);

@@ -1,6 +1,7 @@
 <?php
 /* Copyright (C) 2026	Laurent Destailleur		<eldy@users.sourceforge.net>
  * Copyright (C) 2026	Nick Fragoulis
+ * Copyright (C) 2026       Frédéric France         <frederic.france@free.fr>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +34,10 @@ require_once DOL_DOCUMENT_ROOT . '/ai/class/mcp.class.php';
  * This class acts as a thin protocol layer for the Model Context Protocol.
  * It handles JSON-RPC 2.0 requests and delegates all tool-related operations
  * (discovery, loading, execution) to McpHandler engine.
+ *
+ * Instantiates McpHandler with CTX_MCP_SERVER so that the public allow-list
+ * (AI_MCP_SERVER_ALLOWED_TOOLS) is applied — tools disabled by the admin are
+ * invisible in tools/list responses and blocked at tools/call execution.
  */
 class MCPServer
 {
@@ -67,9 +72,11 @@ class MCPServer
 		$this->conf = $conf;
 		$this->user = $user;
 
-		// Instantiate the handler. It will automatically load all available tools
-		// from the /ai/tools directory and via hooks.
-		$this->mcpHandler = new McpHandler($this->db, $this->user);
+		// Instantiate with CTX_MCP_SERVER so AI_MCP_SERVER_ALLOWED_TOOLS is enforced.
+		// External clients (Claude Desktop, Cursor, etc.) will only see and be able to
+		// call tools that the admin has explicitly allowed for this context.
+		$this->mcpHandler = new McpHandler($this->db, $this->user, $this->conf, McpHandler::CTX_MCP_SERVER);
+		$this->mcpHandler->loadTools();
 	}
 
 	/**
@@ -161,12 +168,14 @@ class MCPServer
 	// Tool handlers
 	/**
 	 * Handles the 'tools/list' request by delegating to McpHandler.
+	 * Only tools permitted by AI_MCP_SERVER_ALLOWED_TOOLS are returned.
 	 *
 	 * @return array{tools: array<int, array<string, mixed>>} An array containing the list of available tools.
 	 */
 	private function handleToolsList(): array
 	{
-		// Delegate to the handler. It returns a simple array of definitions.
+		// McpHandler::getToolsSchema() applies the CTX_MCP_SERVER allow-list,
+		// so disabled tools are never included in this response.
 		$toolsSchema = $this->mcpHandler->getToolsSchema();
 
 		// Wrap it in the 'tools' key as required by the MCP spec.
@@ -175,20 +184,22 @@ class MCPServer
 
 	/**
 	 * Handles the 'tools/call' request by delegating to McpHandler.
+	 * Execution is blocked for any tool not in AI_MCP_SERVER_ALLOWED_TOOLS,
+	 * even if the client sends the request directly without consulting tools/list.
 	 *
 	 * @param array{name?: string, arguments?: array<string, mixed>} $params Parameters containing the tool name and arguments.
 	 * @return array{content: array<int, array<string, mixed>>, isError: bool} The result of the tool execution.
-	 * @throws Exception If the tool is not found or execution fails.
+	 * @throws Exception If the tool is blocked, not found or execution fails.
 	 */
 	private function handleToolCall(array $params): array
 	{
 		$name = $params['name'] ?? '';
 		$args = $params['arguments'] ?? [];
 
-		// Delegate execution to the handler.
+		// McpHandler::executeTool() enforces the allow-list as a second gate.
 		$result = $this->mcpHandler->executeTool($name, $args);
 
-		// The handler will return an error array if the tool is not found or fails.
+		// The handler returns an error array if the tool is blocked, not found or fails.
 		// We need to convert this into an MCP protocol exception.
 		if (isset($result['error'])) {
 			throw new Exception($result['error']);

@@ -274,6 +274,7 @@ return [
 		'conffiletoshowshort' => 'string',
 		'dateSelector' => 'int<0,1>',
 		'db' => '\DoliDB',
+		'dbsession' => '\DoliDB',
 		'disableedit' => 'int<0,1>',
 		'disablemove' => 'int<0,1>',
 		'disableremove' => 'int<0,1>',
@@ -359,6 +360,7 @@ return [
 	//	should be added to the `directory_list` as
 	//	to `exclude_analysis_directory_list`.
 	"exclude_analysis_directory_list" => [
+		'dev/tools/',
 		'htdocs/includes/',
 		'htdocs/install/doctemplates/websites/',
 		'htdocs/core/class/lessc.class.php', // External library
@@ -406,9 +408,11 @@ return [
 		'/^GETPOSTFLOAT$/' => [1, '{^(?:|M[UTS]|C[UT]|\d+)$}',"InvalidGetPostFloatRounding"],
 		'/^price2num$/' => [1, '{^(?:|M[UTS]|C[UT]|\d+)$}',"InvalidPrice2NumRounding"],
 	],
+	'SqlInjectionPlugin' => ['debug' => false],
 	'plugins' => [
 		__DIR__.'/plugins/NoVarDumpPlugin.php',
 		__DIR__.'/plugins/ParamMatchRegexPlugin.php',
+		__DIR__.'/plugins/SqlInjectionPlugin.php',
 		// checks if a function, closure or method unconditionally returns.
 		// can also be written as 'vendor/phan/phan/.phan/plugins/AlwaysReturnPlugin.php'
 		'DeprecateAliasPlugin',
@@ -487,6 +491,7 @@ return [
 		'PhanPluginCanUseNullableParamType',	// Fixer - Report/Add nullable parameter types in the function definition
 		'PhanPluginCanUseNullableReturnType',	// Fixer - Report/Add nullable return types in the function definition
 
+		'PhanPluginEmptyStatementIf',		// Usually done on purpose with a comment
 		'PhanPluginNonBoolBranch',			// Not essential - 31240+ occurrences
 		'PhanPluginNumericalComparison',	// Not essential - 19870+ occurrences
 		// 'PhanTypeMismatchArgument',		// Can detect missing array keys, invalid types, objects being passed when scalar expected - Not all reported by phpstan - <=3800 cases (was: 12300+ before)
